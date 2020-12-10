@@ -229,4 +229,64 @@ weather_df =
 ```
 
 
+```{r}
+boot_df =
+  weather_df %>% 
+  bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(strap, ~lm(tmax ~ tmin, data = .x)),
+    results_rsq = map(models, broom::glance),
+    results_betas = map(models, broom::tidy))
+```
+
+Work for r-squared 
+
+```{r}
+r2_df = boot_df %>% 
+  select(-strap, -models) %>% 
+  unnest(results_rsq) %>% 
+  select(id = .id, rsq = r.squared)
+```
+
+Work for log of beta estimates 
+
+```{r}
+beta_df =
+  boot_df %>% 
+  select(-strap, -models) %>% 
+  unnest(results_betas) %>% 
+  select(id = .id, term, estimate) %>% 
+  pivot_wider(names_from = term,
+              values_from = estimate) %>% 
+  select(id, b0 = `(Intercept)`, b1 = tmin) %>% 
+  mutate(
+    log_betas = log(b0 * b1)
+  ) 
+```
+
+Plots
+
+```{r}
+r2_plot = 
+  r2_df %>% 
+  ggplot(aes(x = rsq)) +
+  geom_histogram() +
+  labs(
+    x = "Estimate Value of r-squared",
+    y = "Frequency", 
+    title = "r-squared distribution across bootstrap samples")
+r2_plot
+
+beta_plot = beta_df %>% 
+  ggplot(aes(x = log_betas)) +
+  geom_histogram() +
+  labs(x = "Estimated Value of log(β0 * β1)",
+       y = "Frequency",
+       title = "log(β0 * β1) distribution across bootstrap samples") +
+  theme(plot.title = element_text(hjust = 0.5))
+beta_plot
+```
+
+Both of the plots seem to follow a normal distribution.  
+The 95% confidence interval of R-squared is `r round(quantile(pull(r2_df, rsq), probs = c(0.025,0.975)), digits = 2)` and the 95% confidence interval for log(beta 0 x log beta 1) is `r round(quantile(pull(beta_df, log_betas), probs = c(0.025,0.975)), digits = 2)`.
 
