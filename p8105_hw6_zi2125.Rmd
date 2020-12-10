@@ -10,6 +10,7 @@ library(tidyverse)
 library(viridis)
 library(modelr)
 library(p8105.datasets)
+library(mgcv)
 
 knitr::opts_chunk$set(
 	echo = TRUE,
@@ -107,23 +108,89 @@ models_results_df %>%
 
 ## Problem 2
 
-Find some residuals
+First we import and clean data. 
 
 ```{r}
 baby_df = 
-  read_csv("./data/birthweight.csv")
+  read_csv("./data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(
+    babysex = as.factor(babysex), 
+    frace = as.factor(frace), 
+    malform = as.factor(malform),
+    mrace = as.factor(mrace),
+    smoken = as.factor(smoken), 
+    frace = recode(frace,"1" = "white", "2" = "black", "3" = "asian", "4" = "puerto rican", "8" = "other" ),  fincome = fincome * 100)
 ```
 
-fit a model
+For cleaning the data, I changed variables to factors and re-coded the race variable to reflect the name of the actual race. I also multiplied the income variable by 100 to reflect the actual value of income for simplicities sake. There are `r sum(is.na(baby_df))` missing values in the entire dataframe. 
+
+
+Now I will fit a full saturated model of the data. 
+```{r}
+full_model = lm(bwt~., data = baby_df)
+summary(full_model)
+```
+
+Next I will fit a hypothesized model for significant underlying factors of birthweight.  
+```{r}
+hyp_model = lm(bwt ~ babysex + bhead + blength + fincome + gaweeks + mrace + malform + ppbmi, data = baby_df)
+
+hyp_model %>% 
+  broom::glance()
+
+hyp_model %>% 
+  broom::tidy() %>% 
+  select(term, estimate, p.value) %>% 
+  knitr::kable(digits = 3)
+```
+
+Next I will add residuals. 
+```{r}
+plot_df = baby_df %>% 
+  add_residuals(hyp_model) %>%
+  add_predictions(hyp_model) %>%
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(aes(alpha = 0.30))
+
+print(plot_df)
+```
+
+Next I will compare this model to two others. The first is using length at birth and gestational age as predictors (main effects only).
 
 ```{r}
-model_fit = lm(bwt ~ gaweeks, data = baby_df)
+model_one = lm(bwt ~ blength + gaweeks, data = baby_df)
+summary(model_one)
 ```
 
+The second is using head circumference, length, sex, and all interactions (including the three-way interaction) between these. 
+
 ```{r}
-baby_df %>% 
-  modelr::add_residuals(model_fit) %>% 
-  ggplot(aes(x = gaweeks, y = resid)) + 
-  geom_point()
+model_two = lm(bwt ~ bhead + babysex + blength + bhead*blength + bhead*babysex + babysex*blength + babysex*blength*bhead, data = baby_df)
+summary(model_two)
 ```
+
+Next I will use cross validation to to make a comparison of all the models. 
+```{r}
+crossval_df = crossv_mc(baby_df, 100)
+
+crossval_df = 
+  crossval_df %>% 
+  mutate(train = map(train, as_tibble, 
+         test = map(as_tibble)))
+
+crossval_df =
+  crossval_df %>% 
+  mutate(fit1 = map(train, ~lm(bwt ~ babysex + bhead + blength + fincome + gaweeks + mrace + malform + ppbmi, data = .x)), 
+         fit2 = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)), 
+         fit3 = map(train, ~lm(bwt ~ bhead + babysex + blength + bhead*blength + bhead*babysex + babysex*blength + babysex*blength*bhead, .x))) %>%
+  mutate(fit = map2_dbl(fit1, test, ~rmse(model = .x, data = .y)), 
+         fit1 = map2_dbl(fit2, test, ~rmse(model = .x, data = .y)), 
+         fit2 = map2_dbl(fit3, test, ~rmse(model = .x, data = .y)))
+
+modelnames = c("Hypothesized Model", "Comparison Model 1", "Comparison Model 2")
+```
+
+Next I will plot the prediction error distribution. 
+
 
